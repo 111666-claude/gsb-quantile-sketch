@@ -1,6 +1,8 @@
 // Package sketch 从分桶直方图估分位。
 package sketch
 
+import "sort"
+
 // Percentiles 是要算的分位点。
 var Percentiles = []int{50, 90, 99}
 
@@ -18,34 +20,66 @@ type Counter struct {
 
 // Quantile 估一个分位点，返回落在的桶上界。
 func Quantile(buckets []Bucket, p int, c *Counter) (int, int) {
-	total := 0
-	for _, b := range buckets {
-		c.Scanned++
-		total += b.Count
-	}
+	bs := sorted(buckets)
+	total := totalOf(bs, c)
 	if total == 0 {
 		return 0, 0
 	}
 	want := total * p / 100
 	seen := 0
-	for _, b := range buckets {
+	for _, b := range bs {
 		c.Scanned++
 		seen += b.Count
-		if seen > want {
+		if seen >= want {
 			return b.High, total
 		}
 	}
-	return buckets[len(buckets)-1].High, total
+	return bs[len(bs)-1].High, total
 }
 
 // All 算全部分位点。
 func All(buckets []Bucket, c *Counter) map[string]int {
 	out := map[string]int{}
-	for _, p := range Percentiles {
-		value, _ := Quantile(buckets, p, c)
-		out["p"+itoa(p)] = value
+	bs := sorted(buckets)
+	total := totalOf(bs, c)
+	if total == 0 {
+		for _, p := range Percentiles {
+			out["p"+itoa(p)] = 0
+		}
+		return out
+	}
+	next := 0
+	seen := 0
+	for _, b := range bs {
+		c.Scanned++
+		seen += b.Count
+		for next < len(Percentiles) && seen >= total*Percentiles[next]/100 {
+			out["p"+itoa(Percentiles[next])] = b.High
+			next++
+		}
+	}
+	for ; next < len(Percentiles); next++ {
+		out["p"+itoa(Percentiles[next])] = bs[len(bs)-1].High
 	}
 	return out
+}
+
+// sorted 返回按左边界升序排列的桶副本。
+func sorted(buckets []Bucket) []Bucket {
+	out := make([]Bucket, len(buckets))
+	copy(out, buckets)
+	sort.Slice(out, func(i, j int) bool { return out[i].Low < out[j].Low })
+	return out
+}
+
+// totalOf 统计总数，每看一个桶计一次扫描。
+func totalOf(buckets []Bucket, c *Counter) int {
+	total := 0
+	for _, b := range buckets {
+		c.Scanned++
+		total += b.Count
+	}
+	return total
 }
 
 func itoa(v int) string {
